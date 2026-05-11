@@ -1,0 +1,141 @@
+version: '3.8'
+
+services:
+  # Балансировщик нагрузки
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app1
+      - app2
+      - app3
+    networks:
+      - ha-network
+    restart: unless-stopped
+
+  # PostgreSQL Master
+  postgres-master:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: postgres
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - ha-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL Replica (для демонстрации репликации)
+  postgres-replica:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - pg_replica_data:/var/lib/postgresql/data
+    networks:
+      - ha-network
+    restart: unless-stopped
+
+  # 3 реплики приложения
+  app1:
+    build: ./app
+    environment:
+      DB_HOST: postgres-master
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: secret
+      DB_NAME: appdb
+      HOSTNAME: app1
+      PORT: 8000
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    networks:
+      - ha-network
+    restart: unless-stopped
+
+  app2:
+    build: ./app
+    environment:
+      DB_HOST: postgres-master
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: secret
+      DB_NAME: appdb
+      HOSTNAME: app2
+      PORT: 8000
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    networks:
+      - ha-network
+    restart: unless-stopped
+
+  app3:
+    build: ./app
+    environment:
+      DB_HOST: postgres-master
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: secret
+      DB_NAME: appdb
+      HOSTNAME: app3
+      PORT: 8000
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    networks:
+      - ha-network
+    restart: unless-stopped
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - ha-network
+    restart: unless-stopped
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - ha-network
+    restart: unless-stopped
+
+networks:
+  ha-network:
+    driver: bridge
+
+volumes:
+  pg_data:
+  pg_replica_data:
+  prometheus_data:
+  grafana_data:
